@@ -173,6 +173,7 @@ export const getUserOnlineStatus = async (userId) => {
         isOnline: user.isOnline|| false,
         lastSeen: user.lastseen ? user.lastseen.toISOString() : null
     }
+    
   } catch (error) {
     throw error;
   }
@@ -183,7 +184,7 @@ export const chatRoom = async (userId) => {
 
     }
     catch(error){
-        
+
     }
 }
 
