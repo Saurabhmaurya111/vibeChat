@@ -1,8 +1,7 @@
 import Message from "../models/message.js";
 import { getRoomId } from "../utils/chatHelper.js";
 import User from "../models/user.js";
-
-
+import { $ } from "kleur/colors";
 
 export const createMessage = async (messageData) => {
   try {
@@ -173,7 +172,7 @@ export const getUserOnlineStatus = async (userId) => {
         isOnline: user.isOnline|| false,
         lastSeen: user.lastseen ? user.lastseen.toISOString() : null
     }
-    
+
   } catch (error) {
     throw error;
   }
@@ -181,7 +180,102 @@ export const getUserOnlineStatus = async (userId) => {
 
 export const chatRoom = async (userId) => {
     try {
+          const userObjectId = new ObjectId(userId);
+          const privateChatQuery = {
+            $or : [{sender: userObjectId} , {receiver: userObjectId}]
+          };
 
+          const privateChats = await Message.aggregate([
+            {$match: privateChatQuery},
+            {$sort: {createdAt: -1}},
+            {$group: {
+                _id: {
+                    $cond:[
+                        {$ne: ['$sender', userObjectId]},
+                        '$sender',
+                        '$receiver'
+                    ]
+                },
+                latestMessageTime: {$first: '$createdAt'},
+                latestMessage: {$first: '$message'},
+                sender: {
+                    $first: '$sender'
+                },
+                messages: {
+                    $push: {
+                        sender: '$sender', 
+                        receiver: '$receiver',
+                        status: '$status',
+                    }
+                }
+            }
+        },
+        {
+            $lookup:{
+                from: 'users',
+                localField: '_id',
+                foreignField: '_id',
+                as: 'userDetails'
+            }
+        },
+        {
+            $unwind: '$userDetails'
+        },
+        {
+            $project:{
+                _id: 0,
+                chatType: 'private',
+                messageId: '$latestMessageId',
+                username : '$userDetails.username',
+                userId: '$userDetails._id',
+                latestMessageTime: 1,
+                latestMessage: 1,
+                senderId: 1,
+                unreadCount:{
+                    $size:{
+                        $filter:{
+                             input: '$message',
+                             as: 'msg',
+                             cond: {
+                                $and:[
+                                    {$eq: ['$$msg.receiver', userObjectId]},
+                                    {$in: ['$$msg.status', ['sent', 'delivered']]}
+                                ]
+                             }
+                        }
+                    },
+                    latestMessageStatus:{
+                        $cond:[
+                            {$eq: ['$sender', userObjectId]},
+                            {
+                                $arrayElemAt:[
+                                    {
+                                        $map:{
+                                            input: {
+                                                $filter: {
+                                                    input: '$messages',
+                                                    as: 'msg',
+                                                    cond: {$eq: ['$$msg.sender', userObjectId]}
+                                                }
+                                            },
+                                            as: 'msg',
+                                            in: '$$m.status'
+                                        }
+                                    },
+                                    0
+                                ]
+                            
+                            },
+                            null
+                        ]
+                    }
+                }
+            }
+        }
+      ]);
+      return privateChats.sort((a,b) =>{
+        return new Date(b.LatestMessageTime) - new Date(a.latestMessageTime);
+      } )
     }
     catch(error){
 
