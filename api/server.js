@@ -8,11 +8,17 @@ import chatRoutes from "./routes/chatRoutes.js";
 import { Server } from "socket.io";
 import { getRoomId } from "./utils/chatHelper.js";
 import {
+  createMessage,
+  getUserLastSeen,
+  markMessagesAsRead,
   getUndeliveredMessages,
   markMessageAsDelivered,
   updateMessageStatus,
   updateUserLastSeen,
 } from "./services/chat_Services.js";
+
+import User from "./models/user.js";
+import Message from "./models/message.js";
 
 connectDB();
 
@@ -44,7 +50,7 @@ io.on("connection", (socket) => {
 
     console.log(`User ${userId} registered with socket ID ${socket.id}`);
 
-     checkPendingMessages();
+    checkPendingMessages();
   });
 
   socket.on("join_room", async ({ userId, partnerId }) => {
@@ -160,7 +166,7 @@ io.on("connection", (socket) => {
     if (typingTimeouts.has(key)) {
       clearTimeout(typingTimeouts.get(key));
     }
-    socket.io(roomId).emit("typing_indicator", {
+    socket.to(roomId).emit("typing_indicator", {
       userId,
       isTyping: true,
     });
@@ -185,13 +191,15 @@ io.on("connection", (socket) => {
       clearTimeout(typingTimeouts.get(key));
       typingTimeouts.delete(key);
     }
-    socket.io(roomId).emit("typing_indicator", {
+    socket.to(roomId).emit("typing_indicator", {
       userId,
       isTyping: false,
     });
   });
 
-  socket.on("message_delivered", async ({ messageId, senderId, receiverId }) => {
+  socket.on(
+    "message_delivered",
+    async ({ messageId, senderId, receiverId }) => {
       try {
         await updateMessageStatus(messageId, "delivered");
         const roomId = getRoomId(senderId, receiverId);
@@ -226,115 +234,105 @@ io.on("connection", (socket) => {
     } catch (error) {}
   });
 
-
-  socket.on("mark_messages_read", async ({ userId , partnerId }) => {
+  socket.on("mark_messages_read", async ({ userId, partnerId }) => {
     try {
-        
-        var count = await markMessagesAsRead(userId , partnerId);
+      var count = await markMessagesAsRead(userId, partnerId);
 
-        if(count > 0){
-            const roomId = getRoomId(senderId , receiverId);
-            io.to(roomId).emit("messages_all_read" ,{
-                reader:userId,
-                sender: partnerId
-            })
+      if (count > 0) {
+        const roomId = getRoomId(senderId, receiverId);
+        io.to(roomId).emit("messages_all_read", {
+          reader: userId,
+          sender: partnerId,
+        });
+      }
+
+      if (onlineUsers.has(partnerId)) {
+        const senderSocketId = onlineUsers.get(partnerId);
+        const senderSocket = io.sockets.sockets.get(senderSocketId);
+
+        if (senderSocket && !senderSocket.rooms.has(roomId)) {
+          senderSocket.emit("message_all_read", {
+            reader: userId,
+            sender: partnerId,
+          });
         }
-
-        if(onlineUsers.has(partnerId)){
-            const senderSocketId = onlineUsers.get(partnerId);
-            const senderSocket = io.sockets.sockets.get(senderSocketId);
-
-            if(senderSocket && !senderSocket.rooms.has(roomId)){
-                senderSocket.emit('message_all_read' , {
-                    reader: userId,
-                    sender: partnerId
-                })
-            }
-        }
-     
+      }
     } catch (error) {}
   });
 
-  socket.on("user_status_change" ,async ({ userId , status , lastSeen}) => {
-    if(status === 'offline'){
-        await updateUserLastSeen(userId, lastSeen);
+  socket.on("user_status_change", async ({ userId, status, lastSeen }) => {
+    if (status === "offline") {
+      await updateUserLastSeen(userId, lastSeen);
 
-        if(onlineUsers.get(userId) === socket.id){
-            onlineUsers.delete(userId);
-        }
+      if (onlineUsers.get(userId) === socket.id) {
+        onlineUsers.delete(userId);
+      }
 
-        io.emit('user_status' , {
-            userId: userId,
-            status: 'offline',
-            lastSeen: lastSeen
-        });
-    }
-    else{
-        onlineUsers.set(userId , socket.id);
-         io.emit('user_status' , {
-            userId: userId,
-            status: 'online',
-            
-        });
+      io.emit("user_status", {
+        userId: userId,
+        status: "offline",
+        lastSeen: lastSeen,
+      });
+    } else {
+      onlineUsers.set(userId, socket.id);
+      io.emit("user_status", {
+        userId: userId,
+        status: "online",
+      });
     }
   });
 
   socket.on("disconnect", async () => {
-     if(currentUserId) {
-        if(onlineUsers.get(currentUserId) === socket.id){
-            onlineUsers.delete(currentUserId);
-        }
+    if (currentUserId) {
+      if (onlineUsers.get(currentUserId) === socket.id) {
+        onlineUsers.delete(currentUserId);
+      }
 
-        const lastSeen = new Date().toISOString();
-        await updateUserLastSeen(currentUserId, lastSeen);
+      const lastSeen = new Date().toISOString();
+      await updateUserLastSeen(currentUserId, lastSeen);
 
-          io.emit('user_status' , {
-            userId: currentUserId,
-            status: 'offline',
-            lastSeen: lastSeen
-        });
-     }
+      io.emit("user_status", {
+        userId: currentUserId,
+        status: "offline",
+        lastSeen: lastSeen,
+      });
+    }
   });
 });
 
-async function checkPendingMessages(userId){
-    try{
-        const pendingMessages = await Message.find({
-            receiver: userId,
-            status: 'sent',
+async function checkPendingMessages(userId) {
+  try {
+    const pendingMessages = await Message.find({
+      receiver: userId,
+      status: "sent",
+    }).populate("sender", "username");
 
-        }).populate('sender' , 'username');
-        
-        if(pendingMessages.length > 0){
-            const messageBySender = {};
+    if (pendingMessages.length > 0) {
+      const messageBySender = {};
 
-            pendingMessages.forEach(message => {
-                if(!messageBySender[msg.senderId._id]){
-                    messageBySender[msg.sender._id] = []
-                }
-                messageBySender[msg.sender._id].push(msg);
-            });
-
-            const userSocket = io.sockets.sockets.get(onlineUsers.get(userId) );
-            if(userSocket){
-                Object.keys(messageBySender).forEach( senderId => {
-                         const count = messageBySender[senderId].length;
-                         const senderName = messageBySender[senderId][0].sender.username;
-
-
-                         userSocket.emit('pending_messages' , {
-                            senderId,
-                            senderName,
-                            count,
-                            lastestMessage: messageBySender[senderId][0].message
-                         });
-                })
-            }
+      pendingMessages.forEach((message) => {
+        if (!messageBySender[msg.senderId._id]) {
+          messageBySender[msg.sender._id] = [];
         }
-    }
-    catch(error){
+        messageBySender[msg.sender._id].push(msg);
+      });
 
+      const userSocket = io.sockets.sockets.get(onlineUsers.get(userId));
+      if (userSocket) {
+        Object.keys(messageBySender).forEach((senderId) => {
+          const count = messageBySender[senderId].length;
+          const senderName = messageBySender[senderId][0].sender.username;
+
+          userSocket.emit("pending_messages", {
+            senderId,
+            senderName,
+            count,
+            lastestMessage: messageBySender[senderId][0].message,
+          });
+        });
+      }
     }
+  } catch (error) {}
 }
 
 httpServer.listen(process.env.PORT, () => {

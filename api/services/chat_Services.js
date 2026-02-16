@@ -1,7 +1,8 @@
 import Message from "../models/message.js";
 import { getRoomId } from "../utils/chatHelper.js";
 import User from "../models/user.js";
-import { $ } from "kleur/colors";
+import mongoose from "mongoose";
+const  ObjectId = mongoose.Types.ObjectId;
 
 export const createMessage = async (messageData) => {
   try {
@@ -20,7 +21,7 @@ export const createMessage = async (messageData) => {
   }
 };
 
-export const fetchMessages = async ({
+export const fetchChatMessages = async ({
   currentUserId,
   senderId,
   receiverId,
@@ -48,7 +49,7 @@ export const fetchMessages = async ({
         );
       }
     }
-    const messages = await Message.aggregate(
+    const messages = await Message.aggregate([ 
       {
         $match: query,
       },
@@ -68,7 +69,7 @@ export const fetchMessages = async ({
           },
         },
       },
-    );
+    ]);
     return messages.reverse();
   } catch (error) {
     throw new Error("Failed to retrieve messages: " + error.message);
@@ -115,9 +116,9 @@ export const getUnreadMessages = async (userId , partnerId) => {
 
 export const updateUserLastSeen = async (userId, lastSeen) => {
   try {
-    const user = await User.findOneAndUpdate(
+    const user = await User.findByIdAndUpdate(
         userId, 
-        {LastSeen: lastSeen},
+        {lastSeen: lastSeen},
         {new: true}
     );
     return user;
@@ -132,7 +133,7 @@ export const markMessageAsDelivered = async (userId, partnerId) => {
   try {
     const result = await Message.updateMany(
         userId, 
-        {receiver: ObjectId(userId), sender : ObjectId(partnerId) , status: 'sent'},
+        {receiver:new ObjectId(userId), sender : new ObjectId(partnerId) , status: 'sent'},
         {
             $set: {status: 'delivered'}
         }
@@ -211,6 +212,7 @@ export const chatRoom = async (userId) => {
                 },
                 latestMessageTime: {$first: '$createdAt'},
                 latestMessage: {$first: '$message'},
+                latestMessageId: {$first: '$_id'},
                 sender: {
                     $first: '$sender'
                 },
@@ -243,11 +245,11 @@ export const chatRoom = async (userId) => {
                 userId: '$userDetails._id',
                 latestMessageTime: 1,
                 latestMessage: 1,
-                senderId: 1,
+                sender: 1,
                 unreadCount:{
                     $size:{
                         $filter:{
-                             input: '$message',
+                             input: '$messages',
                              as: 'msg',
                              cond: {
                                 $and:[
