@@ -88,6 +88,19 @@ export const updateMessageStatus = async (messageId, status) => {
   }
 };
 
+  export const getUndeliveredMessages = async (userId , partnerId) => {
+    try{
+         const message = await Message.find({
+                 receiver: userId,
+                 sender: partnerId,
+                 status: 'sent',
+         },).sort({createdAt: 1});
+         return message;
+    }catch(error){
+           throw error;
+    }
+  }
+
 export const getUnreadMessages = async (userId , partnerId) => {
   try {
     const message = await Message.find(
